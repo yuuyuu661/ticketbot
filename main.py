@@ -6,17 +6,16 @@ import asyncio
 import os
 import re
 from datetime import datetime
-from openai import OpenAI   # ← ここだけでOK
+from openai import OpenAI
 from dotenv import load_dotenv
-load_dotenv()
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))  # ← 初期化はこっち
+load_dotenv()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ====== 設定 ======
 SUPPORT_ROLE_ID = 1398724601256874014
 LOG_CHANNEL_ID = 1402874246786711572
 GUILD_ID = 1398607685158440991  # サーバーID
-openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # ====== Bot初期化 ======
 intents = discord.Intents.default()
@@ -147,17 +146,15 @@ async def ask(interaction: discord.Interaction, question: str):
 async def image(interaction: discord.Interaction, prompt: str):
     await interaction.response.defer()
     try:
-        response = openai.Image.create(
+        response = client.images.generate(
             prompt=prompt,
             n=1,
             size="1024x1024"
         )
-        image_url = response["data"][0]["url"]
+        image_url = response.data[0].url
         await interaction.followup.send(f"🎨 生成した画像:\n{image_url}")
     except Exception as e:
         await interaction.followup.send("❌ 画像生成エラー: " + str(e))
 
 # ====== Bot起動 ======
 bot.run(os.getenv("DISCORD_TOKEN"))
-
-
