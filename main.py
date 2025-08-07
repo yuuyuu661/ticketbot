@@ -23,7 +23,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    await bot.tree.sync(guild=discord.Object(id=GUILD_ID))  # 即時反映
+    await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
     print(f"✅ Bot connected as {bot.user}")
 
 # ====== チケット作成ボタンのView ======
@@ -31,7 +31,7 @@ class TicketView(View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="📩 チケットを作成", style=discord.ButtonStyle.green, custom_id="create_ticket")
+    @discord.ui.button(label="📉 チケットを作成", style=discord.ButtonStyle.green, custom_id="create_ticket")
     async def create_ticket(self, interaction: discord.Interaction, button: Button):
         guild = interaction.guild
         author = interaction.user
@@ -62,11 +62,11 @@ class TicketView(View):
 
         await interaction.response.send_message(f"✅ チケットを作成しました: {channel.mention}", ephemeral=True)
         await channel.send(
-            f"{author.mention} 問い合わせしたい内容を送信してください、担当者が対応します。",
+            f"{author.mention} 問い合わせしたい内容を送信してください、抽選者が対応します。",
             view=CloseTicketView(author)
         )
 
-# ====== チケット終了ボタンのView ======
+# ====== チケット終了ボタン ======
 class CloseTicketView(View):
     def __init__(self, user):
         super().__init__(timeout=None)
@@ -88,7 +88,7 @@ class CloseTicketView(View):
 
         log_channel = interaction.client.get_channel(LOG_CHANNEL_ID)
         embed = discord.Embed(
-            title="📩 問い合わせチケットログ",
+            title="📉 問い合わせチケットログ",
             description=f"{self.user.mention} の問い合わせチャンネルが終了しました。",
             color=discord.Color.blue(),
             timestamp=datetime.utcnow()
@@ -100,15 +100,14 @@ class CloseTicketView(View):
         await asyncio.sleep(5)
         await channel.delete()
 
-# ====== /ticketa コマンド（チケット作成） ======
+# ====== /ticketa コマンド ======
 @bot.tree.command(
     name="ticketa",
     description="問い合わせ用チケット作成ボタンを送信します",
     guild=discord.Object(id=GUILD_ID)
 )
 async def ticketa(interaction: discord.Interaction):
-    allowed_role_id = SUPPORT_ROLE_ID
-    if not any(role.id == allowed_role_id for role in interaction.user.roles):
+    if not any(role.id == SUPPORT_ROLE_ID for role in interaction.user.roles):
         await interaction.response.send_message("❌ このコマンドを使用する権限がありません。", ephemeral=True)
         return
 
@@ -117,13 +116,13 @@ async def ticketa(interaction: discord.Interaction):
         view=TicketView()
     )
 
-# ====== /ask コマンド（ChatGPT AI連携） ======
+# ====== /ask コマンド (ChatGPT) ======
 @bot.tree.command(
     name="ask",
-    description="AI（ChatGPT）に質問できます",
+    description="AI (ChatGPT) に質問できます",
     guild=discord.Object(id=GUILD_ID)
 )
-@app_commands.describe(question="AIに聞きたいことを書いてください")
+@app_commands.describe(question="AIに聞きたいこと")
 async def ask(interaction: discord.Interaction, question: str):
     await interaction.response.defer()
     try:
@@ -134,7 +133,27 @@ async def ask(interaction: discord.Interaction, question: str):
         answer = res.choices[0].message.content
         await interaction.followup.send(f"🧠 ChatGPTの回答:\n{answer}")
     except Exception as e:
-        await interaction.followup.send("❌ エラーが発生しました\n" + str(e))
+        await interaction.followup.send("❌ エラー: " + str(e))
 
-# ====== 起動 ======
+# ====== /image コマンド (DALL·E) ======
+@bot.tree.command(
+    name="image",
+    description="AI画像生成を実行します",
+    guild=discord.Object(id=GUILD_ID)
+)
+@app_commands.describe(prompt="画像にしたい内容")
+async def image(interaction: discord.Interaction, prompt: str):
+    await interaction.response.defer()
+    try:
+        response = openai.Image.create(
+            prompt=prompt,
+            n=1,
+            size="1024x1024"
+        )
+        image_url = response["data"][0]["url"]
+        await interaction.followup.send(f"🎨 生成した画像:\n{image_url}")
+    except Exception as e:
+        await interaction.followup.send("❌ 画像生成エラー: " + str(e))
+
+# ====== Bot起動 ======
 bot.run(os.getenv("DISCORD_TOKEN"))
