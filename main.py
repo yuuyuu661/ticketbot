@@ -117,9 +117,15 @@ class CloseTicketView(View):
 @bot.tree.command(
     name="ticketa",
     description="問い合わせ用チケット作成ボタンを送信します",
-    guild=discord.Object(id=1398607685158440991)  # ← サーバーID指定
+    guild=discord.Object(id=1398607685158440991)  # サーバーID
 )
 async def ticketa(interaction: discord.Interaction):
+    allowed_role_id = 1398724601256874014  # 許可されたロールID
+
+    if not any(role.id == allowed_role_id for role in interaction.user.roles):
+        await interaction.response.send_message("❌ このコマンドを使用する権限がありません。", ephemeral=True)
+        return
+
     await interaction.response.send_message(
         "質問や問い合わせ、サービスのご利用は下記のチケット作成ボタンをクリックしてください。",
         view=TicketView()
@@ -129,5 +135,6 @@ async def ticketa(interaction: discord.Interaction):
 # Bot起動
 # ==========================
 bot.run(os.environ["DISCORD_TOKEN"])
+
 
 
