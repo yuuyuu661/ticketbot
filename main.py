@@ -6,7 +6,8 @@ import asyncio
 import os
 import re
 from datetime import datetime
-import openai
+from openai import OpenAI
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))  # 上部に追加してください
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -126,7 +127,7 @@ async def ticketa(interaction: discord.Interaction):
 async def ask(interaction: discord.Interaction, question: str):
     await interaction.response.defer()
     try:
-        res = openai.ChatCompletion.create(
+        res = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": question}]
         )
@@ -157,3 +158,4 @@ async def image(interaction: discord.Interaction, prompt: str):
 
 # ====== Bot起動 ======
 bot.run(os.getenv("DISCORD_TOKEN"))
+
