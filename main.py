@@ -22,7 +22,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    await bot.tree.sync()
+    await bot.tree.sync(guild=discord.Object(id=1398607685158440991))  # ← これ重要
     print(f"✅ Bot connected as {bot.user}")
 
 # ==========================
@@ -129,4 +129,5 @@ async def ticketa(interaction: discord.Interaction):
 # Bot起動
 # ==========================
 bot.run(os.environ["DISCORD_TOKEN"])
+
 
