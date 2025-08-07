@@ -1,1 +1,5 @@
 discord.py
+flask
+Flask-Cors
+openai       ←★これを追加！
+python-dotenv ←★.envを読み込むならこれも（すでに使ってるので推奨）
