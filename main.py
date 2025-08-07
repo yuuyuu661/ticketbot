@@ -114,8 +114,12 @@ class CloseTicketView(View):
 # ==========================
 # /ticket コマンド
 # ==========================
-@bot.tree.command(name="ticket", description="問い合わせ用チケット作成ボタンを送信します")
-async def ticket(interaction: discord.Interaction):
+@bot.tree.command(
+    name="ticketa",
+    description="問い合わせ用チケット作成ボタンを送信します",
+    guild=discord.Object(id=1398607685158440991)  # ← サーバーID指定
+)
+async def ticketa(interaction: discord.Interaction):
     await interaction.response.send_message(
         "質問や問い合わせ、サービスのご利用は下記のチケット作成ボタンをクリックしてください。",
         view=TicketView()
@@ -125,3 +129,4 @@ async def ticket(interaction: discord.Interaction):
 # Bot起動
 # ==========================
 bot.run(os.environ["DISCORD_TOKEN"])
+
