@@ -6,10 +6,11 @@ import asyncio
 import os
 import re
 from datetime import datetime
-from openai import OpenAI
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))  # 上部に追加してください
+from openai import OpenAI   # ← ここだけでOK
 from dotenv import load_dotenv
 load_dotenv()
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))  # ← 初期化はこっち
 
 # ====== 設定 ======
 SUPPORT_ROLE_ID = 1398724601256874014
@@ -158,4 +159,5 @@ async def image(interaction: discord.Interaction, prompt: str):
 
 # ====== Bot起動 ======
 bot.run(os.getenv("DISCORD_TOKEN"))
+
 
