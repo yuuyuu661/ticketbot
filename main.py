@@ -6,28 +6,27 @@ import asyncio
 import os
 import re
 from datetime import datetime
+import openai
+from dotenv import load_dotenv
+load_dotenv()
 
-# ==========================
-# 設定（必要に応じて書き換え）
-# ==========================
-SUPPORT_ROLE_ID = 1398724601256874014  # サポートロールのID
-LOG_CHANNEL_ID = 1402874246786711572  # 対応履歴チャンネルのID
+# ====== 設定 ======
+SUPPORT_ROLE_ID = 1398724601256874014
+LOG_CHANNEL_ID = 1402874246786711572
+GUILD_ID = 1398607685158440991  # サーバーID
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# ==========================
-# Bot初期化
-# ==========================
+# ====== Bot初期化 ======
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    await bot.tree.sync(guild=discord.Object(id=1398607685158440991))  # ← これ重要
+    await bot.tree.sync(guild=discord.Object(id=GUILD_ID))  # 即時反映
     print(f"✅ Bot connected as {bot.user}")
 
-# ==========================
-# チケット作成ボタンのView
-# ==========================
+# ====== チケット作成ボタンのView ======
 class TicketView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -43,20 +42,17 @@ class TicketView(View):
             await interaction.response.send_message("⚠️ このチャンネルはカテゴリーに属していません。", ephemeral=True)
             return
 
-        # チャンネル名生成
         base_name = f"{category.name}-問い合わせ"
         existing = [ch for ch in category.text_channels if ch.name.startswith(base_name)]
         count = len(existing) + 1
         channel_name = f"{base_name}-{count}"
 
-        # パーミッション設定
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
             author: discord.PermissionOverwrite(read_messages=True, send_messages=True),
             guild.get_role(SUPPORT_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True)
         }
 
-        # チャンネル作成
         channel = await guild.create_text_channel(
             name=channel_name,
             category=category,
@@ -65,15 +61,12 @@ class TicketView(View):
         )
 
         await interaction.response.send_message(f"✅ チケットを作成しました: {channel.mention}", ephemeral=True)
-
         await channel.send(
             f"{author.mention} 問い合わせしたい内容を送信してください、担当者が対応します。",
             view=CloseTicketView(author)
         )
 
-# ==========================
-# チケット終了ボタンのView
-# ==========================
+# ====== チケット終了ボタンのView ======
 class CloseTicketView(View):
     def __init__(self, user):
         super().__init__(timeout=None)
@@ -84,7 +77,6 @@ class CloseTicketView(View):
         channel = interaction.channel
         await interaction.response.send_message("🗑 5秒後にチャンネルを削除します。ログを送信中...", ephemeral=True)
 
-        # ログ収集
         messages = [msg async for msg in channel.history(limit=None, oldest_first=True)]
         safe_name = re.sub(r'[\\/:*?"<>|]', '_', self.user.name)
         filename = f"{safe_name}_log.txt"
@@ -94,7 +86,6 @@ class CloseTicketView(View):
                 timestamp = msg.created_at.strftime("%Y/%m/%d %H:%M")
                 f.write(f"[{timestamp}] {msg.author.display_name}: {msg.content}\n")
 
-        # ログ送信
         log_channel = interaction.client.get_channel(LOG_CHANNEL_ID)
         embed = discord.Embed(
             title="📩 問い合わせチケットログ",
@@ -106,22 +97,17 @@ class CloseTicketView(View):
         embed.add_field(name="メッセージ数", value=str(len(messages)), inline=False)
 
         await log_channel.send(embed=embed, file=discord.File(filename))
-
-        # 5秒後にチャンネル削除
         await asyncio.sleep(5)
         await channel.delete()
 
-# ==========================
-# /ticket コマンド
-# ==========================
+# ====== /ticketa コマンド（チケット作成） ======
 @bot.tree.command(
     name="ticketa",
     description="問い合わせ用チケット作成ボタンを送信します",
-    guild=discord.Object(id=1398607685158440991)  # サーバーID
+    guild=discord.Object(id=GUILD_ID)
 )
 async def ticketa(interaction: discord.Interaction):
-    allowed_role_id = 1398724601256874014  # 許可されたロールID
-
+    allowed_role_id = SUPPORT_ROLE_ID
     if not any(role.id == allowed_role_id for role in interaction.user.roles):
         await interaction.response.send_message("❌ このコマンドを使用する権限がありません。", ephemeral=True)
         return
@@ -131,10 +117,24 @@ async def ticketa(interaction: discord.Interaction):
         view=TicketView()
     )
 
-# ==========================
-# Bot起動
-# ==========================
-bot.run(os.environ["DISCORD_TOKEN"])
+# ====== /ask コマンド（ChatGPT AI連携） ======
+@bot.tree.command(
+    name="ask",
+    description="AI（ChatGPT）に質問できます",
+    guild=discord.Object(id=GUILD_ID)
+)
+@app_commands.describe(question="AIに聞きたいことを書いてください")
+async def ask(interaction: discord.Interaction, question: str):
+    await interaction.response.defer()
+    try:
+        res = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": question}]
+        )
+        answer = res.choices[0].message.content
+        await interaction.followup.send(f"🧠 ChatGPTの回答:\n{answer}")
+    except Exception as e:
+        await interaction.followup.send("❌ エラーが発生しました\n" + str(e))
 
-
-
+# ====== 起動 ======
+bot.run(os.getenv("DISCORD_TOKEN"))
