@@ -63,7 +63,7 @@ class TicketView(View):
 
         await interaction.response.send_message(f"✅ チケットを作成しました: {channel.mention}", ephemeral=True)
         await channel.send(
-            f"{author.mention} 問い合わせしたい内容を送信してください、抽選者が対応します。",
+            f"{author.mention} 問い合わせしたい内容を送信してください、担当者が対応します。",
             view=CloseTicketView(author)
         )
 
@@ -158,3 +158,4 @@ async def image(interaction: discord.Interaction, prompt: str):
 
 # ====== Bot起動 ======
 bot.run(os.getenv("DISCORD_TOKEN"))
+
