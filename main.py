@@ -117,44 +117,6 @@ async def ticketa(interaction: discord.Interaction):
         view=TicketView()
     )
 
-# ====== /ask コマンド (ChatGPT) ======
-@bot.tree.command(
-    name="ask",
-    description="AI (ChatGPT) に質問できます",
-    guild=discord.Object(id=GUILD_ID)
-)
-@app_commands.describe(question="AIに聞きたいこと")
-async def ask(interaction: discord.Interaction, question: str):
-    await interaction.response.defer()
-    try:
-        res = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": question}]
-        )
-        answer = res.choices[0].message.content
-        await interaction.followup.send(f"🧠 ChatGPTの回答:\n{answer}")
-    except Exception as e:
-        await interaction.followup.send("❌ エラー: " + str(e))
-
-# ====== /image コマンド (DALL·E) ======
-@bot.tree.command(
-    name="image",
-    description="AI画像生成を実行します",
-    guild=discord.Object(id=GUILD_ID)
-)
-@app_commands.describe(prompt="画像にしたい内容")
-async def image(interaction: discord.Interaction, prompt: str):
-    await interaction.response.defer()
-    try:
-        response = client.images.generate(
-            prompt=prompt,
-            n=1,
-            size="1024x1024"
-        )
-        image_url = response.data[0].url
-        await interaction.followup.send(f"🎨 生成した画像:\n{image_url}")
-    except Exception as e:
-        await interaction.followup.send("❌ 画像生成エラー: " + str(e))
-
 # ====== Bot起動 ======
 bot.run(os.getenv("DISCORD_TOKEN"))
+
