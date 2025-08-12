@@ -19,7 +19,7 @@ SUPPORT_ROLE_ID = 1398724601256874014
 LOG_CHANNEL_ID = 1402874246786711572
 GUILD_ID = 1398607685158440991  # サーバーID
 
-# ログ保存先（公開防止のためリポジトリ直下に置かない）
+# 公開防止のためリポジトリ直下に置かない
 VC_LOG_FILE = "logs/vc_logs.json"
 JST = timezone(timedelta(hours=9))
 
@@ -27,7 +27,7 @@ JST = timezone(timedelta(hours=9))
 intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True   # VC監視に必須
-intents.members = True        # /voicetime の Member 引数に推奨
+intents.members = True        # Member 引数に推奨
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # 参加中状態の一時保持: { (guild_id, user_id): (channel_id, joined_at_utc) }
@@ -66,9 +66,23 @@ def append_vc_log(guild_id: int, user_id: int, channel_id: int, category_id: Opt
     })
     save_vc_logs(data)
 
-def parse_jst(s: str) -> datetime:
-    # "YYYY-MM-DD HH:MM"（JST）
-    dt = datetime.strptime(s, "%Y-%m-%d %H:%M")
+def parse_jst(s: str, is_start: bool) -> datetime:
+    """
+    s: 'YYYY-MM-DD HH:MM' または 'YYYY-MM-DD'
+    is_start: Trueなら00:00補完、Falseなら23:59補完
+    """
+    s = s.strip()
+    try:
+        dt = datetime.strptime(s, "%Y-%m-%d %H:%M")
+    except ValueError:
+        try:
+            dt = datetime.strptime(s, "%Y-%m-%d")
+            if is_start:
+                dt = dt.replace(hour=0, minute=0)
+            else:
+                dt = dt.replace(hour=23, minute=59)
+        except ValueError:
+            raise ValueError("日付の形式が不正です。YYYY-MM-DD または YYYY-MM-DD HH:MM で入力してください。")
     return dt.replace(tzinfo=JST)
 
 def overlap_seconds(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datetime) -> float:
@@ -212,7 +226,7 @@ async def ticketa(interaction: discord.Interaction):
         view=TicketView()
     )
 
-# ====== /voicetime コマンド（新機能） ======
+# ====== /voicetime コマンド（柔軟日付対応） ======
 @bot.tree.command(
     name="voicetime",
     description="指定ユーザーのVC滞在時間を集計（チャンネル or カテゴリ & 期間）",
@@ -222,8 +236,8 @@ async def ticketa(interaction: discord.Interaction):
     user="対象ユーザー",
     channel="対象のボイスチャンネル（どちらか一方を指定）",
     category="対象のカテゴリー（どちらか一方を指定）",
-    start_at="開始（JST） 'YYYY-MM-DD HH:MM'",
-    end_at="終了（JST） 'YYYY-MM-DD HH:MM'"
+    start_at="開始（JST） 'YYYY-MM-DD' も可（省略時00:00）",
+    end_at="終了（JST） 'YYYY-MM-DD' も可（省略時23:59）"
 )
 async def voicetime(
     interaction: discord.Interaction,
@@ -240,14 +254,14 @@ async def voicetime(
         return
 
     if not start_at or not end_at:
-        await interaction.followup.send("⚠️ `start_at` と `end_at` は `YYYY-MM-DD HH:MM`（JST）で指定してください。", ephemeral=True)
+        await interaction.followup.send("⚠️ `start_at` と `end_at` は 'YYYY-MM-DD' または 'YYYY-MM-DD HH:MM' で指定してください（JST）。", ephemeral=True)
         return
 
     try:
-        start_jst = parse_jst(start_at)
-        end_jst = parse_jst(end_at)
-    except ValueError:
-        await interaction.followup.send("⚠️ 日時の形式が不正です。`YYYY-MM-DD HH:MM` で入力してください。", ephemeral=True)
+        start_jst = parse_jst(start_at, is_start=True)
+        end_jst = parse_jst(end_at, is_start=False)
+    except ValueError as e:
+        await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
         return
 
     if end_jst <= start_jst:
