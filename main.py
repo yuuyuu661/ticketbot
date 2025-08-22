@@ -90,6 +90,33 @@ def overlap_seconds(a_start: datetime, a_end: datetime, b_start: datetime, b_end
     end = min(a_end, b_end)
     return max(0.0, (end - start).total_seconds())
 
+def slugify_for_channel(text: str, fallback: str = "ticket") -> str:
+    """
+    Discordのテキストチャンネル名向けに整形:
+    - 小文字化
+    - 全角→半角英数（簡易）
+    - 空白/連続空白→ハイフン
+    - 許可外文字除去（英数・ハイフン・アンダーバー）
+    - 先頭末尾のハイフン除去
+    - 空ならfallback
+    - 100文字以内に制限
+    """
+    t = text.strip().lower()
+    # 全角英数の簡易正規化（必要十分ではないが実用上OK）
+    t = t.translate(str.maketrans({
+        'Ａ':'a','Ｂ':'b','Ｃ':'c','Ｄ':'d','Ｅ':'e','Ｆ':'f','Ｇ':'g','Ｈ':'h','Ｉ':'i','Ｊ':'j',
+        'Ｋ':'k','Ｌ':'l','Ｍ':'m','Ｎ':'n','Ｏ':'o','Ｐ':'p','Ｑ':'q','Ｒ':'r','Ｓ':'s','Ｔ':'t',
+        'Ｕ':'u','Ｖ':'v','Ｗ':'w','Ｘ':'x','Ｙ':'y','Ｚ':'z',
+        '０':'0','１':'1','２':'2','３':'3','４':'4','５':'5','６':'6','７':'7','８':'8','９':'9',
+        '－':'-','＿':'_','　':' '
+    }))
+    t = re.sub(r"\s+", "-", t)                 # 空白→-
+    t = re.sub(r"[^a-z0-9\-_]", "", t)         # 許可外除去
+    t = t.strip("-_")
+    if not t:
+        t = fallback
+    return t[:100]
+
 # ====== 起動時処理 ======
 @bot.event
 async def setup_hook():
@@ -135,23 +162,39 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if after.channel and (before.channel is None or after.channel.id != before.channel.id):
         vc_start_times[key] = (after.channel.id, now_utc)
 
-# ====== チケット作成ボタンのView ======
-class TicketView(View):
-    def __init__(self):
+# ====== モーダル（チケット名入力） ======
+class NameInputModal(discord.ui.Modal, title="チケット名を入力"):
+    def __init__(self, author: discord.Member, category_id: int):
         super().__init__(timeout=None)
+        self.author = author
+        self.category_id = category_id
 
-    @discord.ui.button(label="📉 チケットを作成", style=discord.ButtonStyle.green, custom_id="create_ticket")
-    async def create_ticket(self, interaction: discord.Interaction, button: Button):
+        self.ticket_name = discord.ui.TextInput(
+            label="チケット名（例：返品相談 / 通信トラブル / 見積もり依頼 など）",
+            placeholder="例：返品相談",
+            required=True,
+            min_length=1,
+            max_length=60
+        )
+        self.add_item(self.ticket_name)
+
+    async def on_submit(self, interaction: discord.Interaction):
         guild = interaction.guild
-        author = interaction.user
-        current_channel = interaction.channel
-        category = current_channel.category
+        category = guild.get_channel(self.category_id)
+        if not isinstance(category, discord.CategoryChannel):
+            # フォールバック：現在のチャンネルのカテゴリ
+            category = interaction.channel.category
+            if category is None:
+                await interaction.response.send_message("⚠️ カテゴリーが取得できませんでした。カテゴリ内で実行してください。", ephemeral=True)
+                return
 
-        if category is None:
-            await interaction.response.send_message("⚠️ このチャンネルはカテゴリーに属していません。", ephemeral=True)
-            return
+        author = self.author
+        base_left = slugify_for_channel(category.name) or "category"
+        custom_mid = slugify_for_channel(str(self.ticket_name.value), "ticket")
 
-        base_name = f"{category.name}-問い合わせ"
+        base_name = f"{base_left}-{custom_mid}"
+
+        # 既存チャンネル数から連番を割り当て（先頭一致）
         existing = [ch for ch in category.text_channels if ch.name.startswith(base_name)]
         count = len(existing) + 1
         channel_name = f"{base_name}-{count}"
@@ -159,21 +202,37 @@ class TicketView(View):
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
             author: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-            guild.get_role(SUPPORT_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            guild.get_role(SUPPORT_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True),
         }
 
         channel = await guild.create_text_channel(
             name=channel_name,
             category=category,
             overwrites=overwrites,
-            topic=f"{author.name} の問い合わせチケット"
+            topic=f"{author.name} の問い合わせチケット（{self.ticket_name.value}）"
         )
 
         await interaction.response.send_message(f"✅ チケットを作成しました: {channel.mention}", ephemeral=True)
         await channel.send(
-            f"{author.mention} 問い合わせしたい内容を送信してください、担当者が対応します。",
+            f"{author.mention} 「{self.ticket_name.value}」についての問い合わせを受け付けました。内容を送信してください。担当者が対応します。",
             view=CloseTicketView(author)
         )
+
+# ====== チケット作成ボタンのView ======
+class TicketView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="📉 チケットを作成", style=discord.ButtonStyle.green, custom_id="create_ticket")
+    async def create_ticket(self, interaction: discord.Interaction, button: Button):
+        current_channel = interaction.channel
+        category = current_channel.category
+        if category is None:
+            await interaction.response.send_message("⚠️ このチャンネルはカテゴリーに属していません。", ephemeral=True)
+            return
+
+        # ここでモーダル表示 → 入力値でチャンネルを作成
+        await interaction.response.send_modal(NameInputModal(author=interaction.user, category_id=category.id))
 
 # ====== チケット終了ボタン ======
 class CloseTicketView(View):
