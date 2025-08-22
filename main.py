@@ -7,9 +7,10 @@ import os
 import re
 import json
 from datetime import datetime, timezone, timedelta
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, List
 from openai import OpenAI
 from dotenv import load_dotenv
+import unicodedata
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -21,6 +22,7 @@ GUILD_ID = 1398607685158440991  # サーバーID
 
 # 公開防止のためリポジトリ直下に置かない
 VC_LOG_FILE = "logs/vc_logs.json"
+TICKET_LABELS_FILE = "logs/ticket_labels.json"  # ← 追加: 永続ビュー用
 JST = timezone(timedelta(hours=9))
 
 # ====== Bot初期化 ======
@@ -33,25 +35,49 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # 参加中状態の一時保持: { (guild_id, user_id): (channel_id, joined_at_utc) }
 vc_start_times: Dict[Tuple[int, int], Tuple[int, datetime]] = {}
 
-# ====== ユーティリティ ======
+# ====== ユーティリティ（ファイル系） ======
 def ensure_log_dir():
     os.makedirs(os.path.dirname(VC_LOG_FILE), exist_ok=True)
+    os.makedirs(os.path.dirname(TICKET_LABELS_FILE), exist_ok=True)
 
-def load_vc_logs():
+def load_json_safe(path: str, default):
     ensure_log_dir()
-    if os.path.exists(VC_LOG_FILE):
+    if os.path.exists(path):
         try:
-            with open(VC_LOG_FILE, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
-            return {}
-    return {}
+            return default
+    return default
 
-def save_vc_logs(data):
+def save_json_safe(path: str, data):
     ensure_log_dir()
-    with open(VC_LOG_FILE, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+def load_vc_logs():
+    return load_json_safe(VC_LOG_FILE, {})
+
+def save_vc_logs(data):
+    save_json_safe(VC_LOG_FILE, data)
+
+def load_ticket_labels() -> List[str]:
+    data = load_json_safe(TICKET_LABELS_FILE, {"labels": []})
+    labels = data.get("labels", [])
+    # 既定ラベルを最低1つは保持
+    if "問い合わせ" not in labels:
+        labels.append("問い合わせ")
+        save_json_safe(TICKET_LABELS_FILE, {"labels": labels})
+    return labels
+
+def add_ticket_label(label: str):
+    data = load_json_safe(TICKET_LABELS_FILE, {"labels": []})
+    labels = data.get("labels", [])
+    if label not in labels:
+        labels.append(label)
+        save_json_safe(TICKET_LABELS_FILE, {"labels": labels})
+
+# ====== ユーティリティ（VCログ） ======
 def append_vc_log(guild_id: int, user_id: int, channel_id: int, category_id: Optional[int],
                   joined_at_utc: datetime, left_at_utc: datetime):
     data = load_vc_logs()
@@ -90,38 +116,31 @@ def overlap_seconds(a_start: datetime, a_end: datetime, b_start: datetime, b_end
     end = min(a_end, b_end)
     return max(0.0, (end - start).total_seconds())
 
-def slugify_for_channel(text: str, fallback: str = "ticket") -> str:
+# ====== チャンネル名スラグ化 ======
+_channel_name_allowed = re.compile(r"[a-z0-9\-ぁ-んァ-ヴー一-龯]+")
+
+def slugify_label(label: str) -> str:
     """
-    Discordのテキストチャンネル名向けに整形:
-    - 小文字化
-    - 全角→半角英数（簡易）
-    - 空白/連続空白→ハイフン
-    - 許可外文字除去（英数・ハイフン・アンダーバー）
-    - 先頭末尾のハイフン除去
-    - 空ならfallback
-    - 100文字以内に制限
+    Discordのチャンネル名は小文字・英数字・ハイフン推奨。
+    日本語は可だが、記号や絵文字は除去。空白はハイフンに。
     """
-    t = text.strip().lower()
-    # 全角英数の簡易正規化（必要十分ではないが実用上OK）
-    t = t.translate(str.maketrans({
-        'Ａ':'a','Ｂ':'b','Ｃ':'c','Ｄ':'d','Ｅ':'e','Ｆ':'f','Ｇ':'g','Ｈ':'h','Ｉ':'i','Ｊ':'j',
-        'Ｋ':'k','Ｌ':'l','Ｍ':'m','Ｎ':'n','Ｏ':'o','Ｐ':'p','Ｑ':'q','Ｒ':'r','Ｓ':'s','Ｔ':'t',
-        'Ｕ':'u','Ｖ':'v','Ｗ':'w','Ｘ':'x','Ｙ':'y','Ｚ':'z',
-        '０':'0','１':'1','２':'2','３':'3','４':'4','５':'5','６':'6','７':'7','８':'8','９':'9',
-        '－':'-','＿':'_','　':' '
-    }))
-    t = re.sub(r"\s+", "-", t)                 # 空白→-
-    t = re.sub(r"[^a-z0-9\-_]", "", t)         # 許可外除去
-    t = t.strip("-_")
-    if not t:
-        t = fallback
-    return t[:100]
+    # 全角英数を半角へ
+    norm = unicodedata.normalize("NFKC", label.strip())
+    # 空白→ハイフン
+    norm = re.sub(r"\s+", "-", norm)
+    # 許容文字以外は削除（日本語はざっくり許容）
+    parts = re.findall(_channel_name_allowed, norm.lower())
+    s = "-".join(parts) if parts else "ticket"
+    # ハイフン重複の圧縮
+    s = re.sub(r"-{2,}", "-", s).strip("-")
+    return s or "ticket"
 
 # ====== 起動時処理 ======
 @bot.event
 async def setup_hook():
-    # 永続View（再起動後もボタン動作）
-    bot.add_view(TicketView())
+    # 既知のすべてのラベルで永続Viewを再登録
+    for lb in load_ticket_labels():
+        bot.add_view(TicketView(lb))  # timeout=None の永続ビュー
     # ギルドコマンド同期（安定）
     synced = await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
     print(f"✅ Synced {len(synced)} guild commands to {GUILD_ID}: {[c.name for c in synced]}")
@@ -162,39 +181,40 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if after.channel and (before.channel is None or after.channel.id != before.channel.id):
         vc_start_times[key] = (after.channel.id, now_utc)
 
-# ====== モーダル（チケット名入力） ======
-class NameInputModal(discord.ui.Modal, title="チケット名を入力"):
-    def __init__(self, author: discord.Member, category_id: int):
+# ====== チケット作成ボタンのView（ラベル対応） ======
+class TicketView(View):
+    """
+    生成時に ticket_label を受け取り、その内容を custom_id に埋め込んだボタンを1つ追加。
+    再起動後も TICKET_LABELS_FILE に保存された label ごとに add_view して永続化。
+    """
+    def __init__(self, ticket_label: str):
         super().__init__(timeout=None)
-        self.author = author
-        self.category_id = category_id
+        self.ticket_label = ticket_label  # 元ラベル（表示用）
+        self.slug = slugify_label(ticket_label)  # チャンネル名用
 
-        self.ticket_name = discord.ui.TextInput(
-            label="チケット名（例：返品相談 / 通信トラブル / 見積もり依頼 など）",
-            placeholder="例：返品相談",
-            required=True,
-            min_length=1,
-            max_length=60
+        btn = Button(
+            label=f"📉 {self.ticket_label} チケットを作成",
+            style=discord.ButtonStyle.green,
+            custom_id=f"create_ticket::{self.slug}"  # 永続識別子
         )
-        self.add_item(self.ticket_name)
 
-    async def on_submit(self, interaction: discord.Interaction):
+        async def _callback(interaction: discord.Interaction):
+            await self.create_ticket(interaction)
+
+        btn.callback = _callback
+        self.add_item(btn)
+
+    async def create_ticket(self, interaction: discord.Interaction):
         guild = interaction.guild
-        category = guild.get_channel(self.category_id)
-        if not isinstance(category, discord.CategoryChannel):
-            # フォールバック：現在のチャンネルのカテゴリ
-            category = interaction.channel.category
-            if category is None:
-                await interaction.response.send_message("⚠️ カテゴリーが取得できませんでした。カテゴリ内で実行してください。", ephemeral=True)
-                return
+        author = interaction.user
+        current_channel = interaction.channel
+        category = current_channel.category
 
-        author = self.author
-        base_left = slugify_for_channel(category.name) or "category"
-        custom_mid = slugify_for_channel(str(self.ticket_name.value), "ticket")
+        if category is None:
+            await interaction.response.send_message("⚠️ このチャンネルはカテゴリーに属していません。", ephemeral=True)
+            return
 
-        base_name = f"{base_left}-{custom_mid}"
-
-        # 既存チャンネル数から連番を割り当て（先頭一致）
+        base_name = f"{category.name}-{self.slug}"
         existing = [ch for ch in category.text_channels if ch.name.startswith(base_name)]
         count = len(existing) + 1
         channel_name = f"{base_name}-{count}"
@@ -202,37 +222,21 @@ class NameInputModal(discord.ui.Modal, title="チケット名を入力"):
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
             author: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-            guild.get_role(SUPPORT_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            guild.get_role(SUPPORT_ROLE_ID): discord.PermissionOverwrite(read_messages=True, send_messages=True)
         }
 
         channel = await guild.create_text_channel(
             name=channel_name,
             category=category,
             overwrites=overwrites,
-            topic=f"{author.name} の問い合わせチケット（{self.ticket_name.value}）"
+            topic=f"{author.name} の「{self.ticket_label}」チケット"
         )
 
         await interaction.response.send_message(f"✅ チケットを作成しました: {channel.mention}", ephemeral=True)
         await channel.send(
-            f"{author.mention} 「{self.ticket_name.value}」についての問い合わせを受け付けました。内容を送信してください。担当者が対応します。",
+            f"{author.mention} 「**{self.ticket_label}**」に関する問い合わせ内容を送信してください。担当者が対応します。",
             view=CloseTicketView(author)
         )
-
-# ====== チケット作成ボタンのView ======
-class TicketView(View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="📉 チケットを作成", style=discord.ButtonStyle.green, custom_id="create_ticket")
-    async def create_ticket(self, interaction: discord.Interaction, button: Button):
-        current_channel = interaction.channel
-        category = current_channel.category
-        if category is None:
-            await interaction.response.send_message("⚠️ このチャンネルはカテゴリーに属していません。", ephemeral=True)
-            return
-
-        # ここでモーダル表示 → 入力値でチャンネルを作成
-        await interaction.response.send_modal(NameInputModal(author=interaction.user, category_id=category.id))
 
 # ====== チケット終了ボタン ======
 class CloseTicketView(View):
@@ -269,23 +273,30 @@ class CloseTicketView(View):
         await asyncio.sleep(5)
         await channel.delete()
 
-# ====== /ticketa コマンド ======
+# ====== /ticketa コマンド（ラベル引数付き） ======
 @bot.tree.command(
     name="ticketa",
-    description="問い合わせ用チケット作成ボタンを送信します",
+    description="問い合わせ用チケット作成ボタンを送信します（label で名称変更可）",
     guild=discord.Object(id=GUILD_ID)
 )
-async def ticketa(interaction: discord.Interaction):
+@app_commands.describe(
+    label="ボタン/チケット名の中央部分（既定: 問い合わせ） 例: 採用, 営業, サポート"
+)
+async def ticketa(interaction: discord.Interaction, label: Optional[str] = "問い合わせ"):
     if not any(role.id == SUPPORT_ROLE_ID for role in interaction.user.roles):
         await interaction.response.send_message("❌ このコマンドを使用する権限がありません。", ephemeral=True)
         return
 
+    # 永続化用に記録しておく（再起動後の persistent view 再登録に使用）
+    add_ticket_label(label)
+
+    view = TicketView(label)
     await interaction.response.send_message(
-        "質問や問い合わせ、サービスのご利用は下記のチケット作成ボタンをクリックしてください。",
-        view=TicketView()
+        f"以下のボタンから「**{label}**」チケットを作成できます。",
+        view=view
     )
 
-# ====== /voicetime コマンド（柔軟日付対応） ======
+# ====== /voicetime コマンド（柔軟日付対応：既存） ======
 @bot.tree.command(
     name="voicetime",
     description="指定ユーザーのVC滞在時間を集計（チャンネル or カテゴリ & 期間）",
